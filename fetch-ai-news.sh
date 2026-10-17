@@ -4,8 +4,13 @@
 #
 set -euo pipefail
 
-BASE_DIR="/root/ai-news"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+BASE_DIR="${BASE_DIR:-${SCRIPT_DIR}}"
 LOG_DIR="${BASE_DIR}/logs"
+SEND_EMAIL="${SEND_EMAIL:-false}"
+AGENTMAIL_API_KEY="${AGENTMAIL_API_KEY:-}"
+AGENTMAIL_INBOX_ID="${AGENTMAIL_INBOX_ID:-}"
+AGENTMAIL_TO="${AGENTMAIL_TO:-}"
 ERROR_LOG="${LOG_DIR}/errors.log"
 RUN_LOG="${LOG_DIR}/runs.log"
 TIMESTAMP=$(date '+%Y-%m-%d %H:%M:%S %Z')
@@ -36,6 +41,7 @@ log "=== AI News Update Started ==="
 # We use curl with a short timeout so a hang doesn't stall cron forever.
 # -------------------------------------------------------------------
 NEWS_OUTPUT="${BASE_DIR}/latest-news-$(date +%Y%m%d).md"
+export NEWS_OUTPUT AGENTMAIL_API_KEY AGENTMAIL_INBOX_ID AGENTMAIL_TO
 
 {
     echo "# AI News — $(date '+%A, %d %B %Y')"
@@ -124,39 +130,36 @@ echo "... (full report at ${NEWS_OUTPUT})"
 echo "════════════════════════════════════════════════"
 
 # ===================================================================
-# Send via AgentMail Email
+# Optional AgentMail delivery. Disabled by default to prevent accidental
+# external sends; credentials and recipients must be supplied at runtime.
 # ===================================================================
-log "Sending news digest via AgentMail..."
-if python3 -I -c "
-import sys
+if [[ "${SEND_EMAIL,,}" == "true" ]]; then
+    if [[ -z "${AGENTMAIL_API_KEY}" || -z "${AGENTMAIL_INBOX_ID}" || -z "${AGENTMAIL_TO}" ]]; then
+        err_log "SEND_EMAIL=true requires AGENTMAIL_API_KEY, AGENTMAIL_INBOX_ID, and AGENTMAIL_TO"
+    elif python3 -I -c "
+import os, sys
 try:
     import agentmail
-    api_key = 'am_us_1b883aa1de96b109b495a2ea8bbe87ec3197c6f284280c3477bac31b9c01001e'
-    inbox_id = 'venky5789@agentmail.to'
-    to_email = 'venky5789@agentmail.to'
-
-    client = agentmail.AgentMail(api_key=api_key)
-
-    # Read the news file
-    with open('${NEWS_OUTPUT}', 'r') as f:
+    client = agentmail.AgentMail(api_key=os.environ['AGENTMAIL_API_KEY'])
+    with open(os.environ['NEWS_OUTPUT'], 'r', encoding='utf-8') as f:
         content = f.read()
-
-    # Send the email
     resp = client.inboxes.messages.send(
-        inbox_id=inbox_id,
-        to=[to_email],
-        subject='📰 AI News Digest — $(date "+%A, %d %B %Y")',
+        inbox_id=os.environ['AGENTMAIL_INBOX_ID'],
+        to=[os.environ['AGENTMAIL_TO']],
+        subject='📰 AI News Digest',
         text=content,
     )
     print(f'Sent OK — Message ID: {resp.message_id}')
-    sys.exit(0)
 except Exception as e:
     print(f'FAILED: {e}')
     sys.exit(1)
 " 2>>"${ERROR_LOG}"; then
-    log "✅ News digest emailed successfully to venky5789@agentmail.to"
+        log "News digest emailed successfully"
+    else
+        err_log "Failed to email news digest"
+    fi
 else
-    err_log "Failed to email news digest"
+    log "Email delivery disabled (set SEND_EMAIL=true to enable)"
 fi
 
 log "=== AI News Update Completed Successfully ==="
